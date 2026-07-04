@@ -1,0 +1,117 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: newpod_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: newpod_user
+      POSTGRES_PASSWORD: newpod_secure_password
+      POSTGRES_DB: newpod_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U newpod_user -d newpod_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - newpod_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: newpod_redis
+    restart: always
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - newpod_network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: newpod_backend
+    restart: always
+    environment:
+      - ENV=dev
+      - DATABASE_URL=postgresql+asyncpg://newpod_user:newpod_secure_password@postgres:5432/newpod_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - SECRET_KEY=super_secure_secret_key_change_me_in_prod_12345
+      - PAYSTACK_SECRET_KEY=sk_test_mock_secret_key_for_development
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - /app/.venv
+    networks:
+      - newpod_network
+
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: newpod_celery_worker
+    restart: always
+    command: uv run celery -A src.core.celery_app worker --loglevel=info
+    environment:
+      - ENV=dev
+      - DATABASE_URL=postgresql+asyncpg://newpod_user:newpod_secure_password@postgres:5432/newpod_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - SECRET_KEY=super_secure_secret_key_change_me_in_prod_12345
+      - PAYSTACK_SECRET_KEY=sk_test_mock_secret_key_for_development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - /app/.venv
+    networks:
+      - newpod_network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: newpod_frontend
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    networks:
+      - newpod_network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  newpod_network:
+    name: newpod_network
+    driver: bridge
